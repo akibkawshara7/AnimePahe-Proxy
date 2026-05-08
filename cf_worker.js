@@ -7,18 +7,18 @@ const CONFIG = {
     CORS: {
         ALLOW_METHODS: 'GET, POST, OPTIONS, HEAD',
         ALLOW_HEADERS: 'Content-Type, X-Requested-With, Range, Authorization, Cookie',
-        EXPOSE_HEADERS: 'Content-Range, Content-Length, Accept-Ranges, Content-Type',
-        ALLOW_CREDENTIALS: 'true'
+        EXPOSE_HEADERS: 'Content-Range, Content-Length, Accept-Ranges, Content-Type'
     },
     CACHE_CONTROL: 'no-store, no-cache, must-revalidate, proxy-revalidate'
 };
 
 const cookieJar = new Map();
 
-function isOriginAllowed(origin, allowedOrigins) {
+function isOriginAllowed(origin, allowedOrigins, hasUrlParam) {
     if (!allowedOrigins || allowedOrigins.length === 0 || allowedOrigins.includes("*")) {
         return true;
     }
+    if (!origin && hasUrlParam) return true;
     return allowedOrigins.includes(origin);
 }
 
@@ -111,7 +111,7 @@ function setCorsHeaders(request, responseHeaders) {
     responseHeaders.set('Access-Control-Allow-Methods', CONFIG.CORS.ALLOW_METHODS);
     responseHeaders.set('Access-Control-Allow-Headers', CONFIG.CORS.ALLOW_HEADERS);
     responseHeaders.set('Access-Control-Expose-Headers', CONFIG.CORS.EXPOSE_HEADERS);
-    responseHeaders.set('Access-Control-Allow-Credentials', CONFIG.CORS.ALLOW_CREDENTIALS);
+    responseHeaders.set('Vary', 'Origin');
     responseHeaders.set('Cache-Control', CONFIG.CACHE_CONTROL);
     responseHeaders.set('X-Proxy-By', 'cloudflare-worker-m3u8-proxy');
 }
@@ -164,7 +164,7 @@ export default {
             return new Response(null, { headers: h });
         }
 
-        if (!isOriginAllowed(origin, allowedOrigins)) {
+        if (!isOriginAllowed(origin, allowedOrigins, url.searchParams.has('url'))) {
             return new Response(`Origin "${origin}" blacklisted.`, { status: 403 });
         }
 
@@ -227,13 +227,19 @@ export default {
                     if (val) responseHeaders.set(h, val);
                 });
 
-                const isSegment = targetUrl.pathname.toLowerCase().endsWith(".ts") ||
-                    targetUrl.pathname.toLowerCase().endsWith(".m4s") ||
-                    targetUrl.hostname.includes('owocdn') ||
-                    targetUrl.hostname.includes('kwik');
+                const path = targetUrl.pathname.toLowerCase();
+                const isKey = path.endsWith('.key');
+                const isSegment = !isKey && (
+                    path.endsWith('.ts') ||
+                    path.endsWith('.m4s') ||
+                    path.endsWith('.jpg') ||
+                    path.includes('/segment-')
+                );
 
                 if (isSegment) {
                     responseHeaders.set('Content-Type', 'video/mp2t');
+                } else if (isKey) {
+                    responseHeaders.set('Content-Type', 'application/octet-stream');
                 }
 
                 ['x-amz-cf-pop', 'x-amz-cf-id', 'x-cache', 'via', 'server'].forEach(h => responseHeaders.delete(h));
