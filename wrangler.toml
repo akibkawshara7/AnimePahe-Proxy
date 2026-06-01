@@ -1,4 +1,4 @@
-name = "pahe"
+name = "animepaheproxy"
 main = "cf_worker.js"
 compatibility_date = "2024-03-04"
 
