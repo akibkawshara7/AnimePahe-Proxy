@@ -12,24 +12,33 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const cookieJar = new Map();
 
+
+process.on('uncaughtException', (err) => {
+    console.error('CRITICAL: Uncaught Exception:', err);
+    
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('CRITICAL: Unhandled Rejection at:', promise, 'reason:', reason);
+});
+// ----------------------------------------------------------------------
+
 function createSafeSender(res) {
     let sent = false;
     return (statusCode, data) => {
         if (!sent) {
             sent = true;
-            res.status(statusCode).send(data);
+            if (!res.headersSent) {
+                res.status(statusCode).send(data);
+            }
         }
     };
 }
 
 function isOriginAllowed(origin) {
-    if (CONFIG.ALLOWED_ORIGINS.includes("*")) {
-        return true;
-    }
-    if (CONFIG.ALLOWED_ORIGINS.length && !CONFIG.ALLOWED_ORIGINS.includes(origin)) {
-        return false;
-    }
-    return true;
+    if (!origin) return false;
+    const allowedOrigins = ['https://yourdoman.com', 'http://yourdomain.com'];
+    return allowedOrigins.includes(origin);
 }
 
 function buildUpstreamHeaders(req, url, headersParam) {
@@ -64,7 +73,6 @@ function buildUpstreamHeaders(req, url, headersParam) {
     if (referer) {
         let refStr = decodeURIComponent(referer);
 
-        // Dynamic referer logic based on target URL
         if (url.hostname.includes('kwik') || url.hostname.includes('kwics')) {
             refStr = CONFIG.ANIMEPAHE_BASE;
             if (!refStr.endsWith('/')) refStr += '/';
@@ -122,8 +130,10 @@ function updateCookieJar(url, targetResponse) {
 }
 
 function setCorsHeaders(req, res) {
-    const origin = req.headers.origin || '*';
-    res.setHeader('Access-Control-Allow-Origin', origin);
+    const origin = req.headers.origin;
+    const allowedOrigin = (origin === 'https://yourdomain.com' || origin === 'http://yourdomain.com') ? origin : 'https://yourdomain.com';
+    
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
     res.setHeader('Access-Control-Allow-Methods', CONFIG.CORS.ALLOW_METHODS);
     res.setHeader('Access-Control-Allow-Headers', CONFIG.CORS.ALLOW_HEADERS);
     res.setHeader('Access-Control-Expose-Headers', CONFIG.CORS.EXPOSE_HEADERS);
@@ -170,12 +180,7 @@ function proxyPlaylistContent(content, url, headersParam) {
 }
 
 app.get('/', (req, res) => {
-    const origin = req.headers.origin || "";
-    if (!isOriginAllowed(origin)) {
-        res.status(403).send(`The origin "${origin}" was blacklisted by the operator of this proxy.`);
-        return;
-    }
-    res.sendFile(path.join(__dirname, 'html', 'playground.html'));
+    res.status(200).send("Welcome to site");
 });
 
 app.get("/m3u8-proxy", async (req, res) => {
@@ -183,7 +188,7 @@ app.get("/m3u8-proxy", async (req, res) => {
     const origin = req.headers.origin || "";
 
     if (!isOriginAllowed(origin)) {
-        return safeSend(403, `The origin "${origin}" was blacklisted by the operator of this proxy.`);
+        return safeSend(403, `The origin "${origin}" is not allowed to use this proxy.`);
     }
 
     try {
@@ -196,7 +201,8 @@ app.get("/m3u8-proxy", async (req, res) => {
         const headersParam = req.query.headers ? decodeURIComponent(req.query.headers) : "";
         const headers = buildUpstreamHeaders(req, url, headersParam);
 
-        process.env.NODE_TLS_REJECT_UNAUTHORIZED = url.pathname.endsWith(".mp4") ? "0" : "1";
+        // --- CRITICAL FIX 2: Replaced process.env race condition with strictSSL option ---
+        const ignoreTls = url.pathname.endsWith(".mp4"); 
 
         const options = {
             method: 'GET',
@@ -204,8 +210,11 @@ app.get("/m3u8-proxy", async (req, res) => {
             headers: headers,
             encoding: null,
             resolveWithFullResponse: true,
-            timeout: 20000
+            timeout: 20000,
+            strictSSL: !ignoreTls 
         };
+        // ---------------------------------------------------------------------------------
+
         try {
             const targetResponse = await cloudscraper(options);
 
